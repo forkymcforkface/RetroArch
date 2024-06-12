@@ -1,34 +1,3 @@
-/*  DynaRes
- *  Copyright (C) 2021 rTomas.
- *  Available retroarch.cfg parameters:
- *  dynares_mode              = disabled, native, superx, custom, fixed
- *  dynares_crt_type          = "generic_15"
- *  dynares_video_info        = "true/false"
- *  dynares_handheld_full     = "true/false"
- *  dynares_fast_mode         = "true/false"
- *  dynares_flicker_reduction = "true/false"
- *  rgbpi_restrict_ui         = "true/false"
- *
- *  RetroArch - A frontend for libretro.
- *  Copyright (C) 2010-2014 - Hans-Kristian Arntzen
- *  Copyright (C) 2011-2021 - Daniel De Matteis
- *  Copyright (C) 2012-2015 - Michael Lelli
- *  Copyright (C) 2014-2017 - Jean-Andr� Santoni
- *  Copyright (C) 2016-2019 - Brad Parker
- *  Copyright (C) 2016-2019 - Andr�s Su�rez (input mapper code)
- *  Copyright (C) 2016-2017 - Gregor Richards (network code)
- *
- *  RetroArch is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  RetroArch is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with RetroArch.
- *  If not, see <http://www.gnu.org/licenses/>.
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include "../verbosity.h"
@@ -118,6 +87,17 @@ void dynares_video_show_info(int width, int height, int interlaced, float hz)
       runloop_msg_queue_push(msg, 1, 90, false, NULL,
                              MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    RARCH_LOG("[DynaRes]: Info: %s\n", msg);
+}
+
+void adjust_interlaced_height(unsigned *height, timing *t)
+{
+   if (t->interlaced)
+   {
+      t->interlaced = 0;
+      *height /= 2;
+      t->vvv = *height;
+      t->v_total /= 2;
+   }
 }
 
 void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsigned base_height, double fps, int region, float *font_size)
@@ -356,6 +336,9 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
    sr_init_disp("auto");
    if(sr_get_timing(*width, *height, fps, crt_type, 0, &srtiming) == 1)
    {
+      // Check if interlaced and adjust height
+      adjust_interlaced_height(height, &srtiming);
+
       snprintf(gam_timing, sizeof(gam_timing), "%d %d %d %d %d %d %d %d %d %d %d %d %d %f %d %ld %d",
                srtiming.hhh, srtiming.hsync, srtiming.h_f_porch, srtiming.h_b_porch, srtiming.h_total,
                srtiming.vvv, srtiming.vsync, srtiming.v_f_porch, srtiming.v_b_porch, srtiming.v_total,
@@ -376,6 +359,10 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
          sr_set_v_shift_correct(0);*/
       sr_init_disp("auto");
       sr_get_timing(*width, *height, fps, crt_type, 0, &srtiming);
+
+      // Check if interlaced and adjust height
+      adjust_interlaced_height(height, &srtiming);
+
       snprintf(gam_timing, sizeof(gam_timing), "%d %d %d %d %d %d %d %d %d %d %d %d %d %f %d %ld %d",
                srtiming.hhh, srtiming.hsync, srtiming.h_f_porch, srtiming.h_b_porch, srtiming.h_total,
                srtiming.vvv, srtiming.vsync, srtiming.v_f_porch, srtiming.v_b_porch, srtiming.v_total,
@@ -384,6 +371,7 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
       RARCH_LOG("[DynaRes]: Init: %s(%s): Game timing requested: %s\n", dynares, crt_type, gam_timing);
       RARCH_LOG("[DynaRes]: Init: Game timing transformation (15K/25/31Khz): %u %u %f\n", srtiming.hhh, srtiming.vvv, fps);
       sr_deinit();
+
       if (srtiming.vvv != *height)
       {
          *width = srtiming.hhh;
@@ -398,6 +386,9 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
             settings->bools.video_smooth = 0;
       }
    }
+   /* Adjust viewport to match the new height */
+   v_height = *height;
+
    /* Write timings to file */
    pf = fopen("/opt/rgbpi/ui/data/timings.dat", "w");
    fputs(sys_timing, pf);
@@ -410,9 +401,9 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
    settings->video_viewport_custom.width = v_width;
    settings->video_viewport_custom.height = v_height;
    settings->video_viewport_custom.x = (settings->uints.video_fullscreen_x - v_width) / 2;
-   settings->video_viewport_custom.y = (settings->uints.video_fullscreen_y - v_height) / 2;
+   settings->video_viewport_custom.y = 0; // Explicitly set to 0
    RARCH_LOG("[DynaRes]: Init: %s: Viewport resolution changed: %ux%u\n", dynares, v_width, v_height);
-   dynares_video_show_info(base_width, base_height, srtiming.interlaced, fps);
+   dynares_video_show_info(*width, *height, srtiming.interlaced, fps);
 }
 
 void dynares_loop_check(unsigned base_width, unsigned base_height, double fps)
@@ -527,10 +518,17 @@ void dynares_set_geometry(unsigned base_width, unsigned base_height, double fps)
          v_width = (settings->uints.video_fullscreen_x / base_width) * base_width - overscan_x;
          v_height = (settings->uints.video_fullscreen_y / base_height) * base_height - overscan_y;
       }
+      /* Adjust viewport to match the new height */
+      if (srtiming.interlaced)
+      {
+         v_height /= 2;
+         overscan_y = 0; // Set overscan_y to 0 for interlaced games
+      }
+
       settings->video_viewport_custom.width = v_width;
       settings->video_viewport_custom.height = v_height;
       settings->video_viewport_custom.x = (settings->uints.video_fullscreen_x - v_width) / 2;
-      settings->video_viewport_custom.y = (settings->uints.video_fullscreen_y - v_height) / 2;
+      settings->video_viewport_custom.y = 0; // Explicitly set to 0
       RARCH_LOG("[DynaRes]: Geom: %s: Viewport resolution changed: %ux%u\n", dynares, v_width, v_height);
       dynares_video_show_info(base_width, base_height, srtiming.interlaced, fps);
    }
