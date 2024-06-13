@@ -1,3 +1,34 @@
+/*  DynaRes
+ *  Copyright (C) 2021 rTomas.
+ *  Available retroarch.cfg parameters:
+ *  dynares_mode              = disabled, native, superx, custom, fixed
+ *  dynares_crt_type          = "generic_15"
+ *  dynares_video_info        = "true/false"
+ *  dynares_handheld_full     = "true/false"
+ *  dynares_fast_mode         = "true/false"
+ *  dynares_flicker_reduction = "true/false"
+ *  rgbpi_restrict_ui         = "true/false"
+ *
+ *  RetroArch - A frontend for libretro.
+ *  Copyright (C) 2010-2014 - Hans-Kristian Arntzen
+ *  Copyright (C) 2011-2021 - Daniel De Matteis
+ *  Copyright (C) 2012-2015 - Michael Lelli
+ *  Copyright (C) 2014-2017 - Jean-Andr� Santoni
+ *  Copyright (C) 2016-2019 - Brad Parker
+ *  Copyright (C) 2016-2019 - Andr�s Su�rez (input mapper code)
+ *  Copyright (C) 2016-2017 - Gregor Richards (network code)
+ *
+ *  RetroArch is free software: you can redistribute it and/or modify it under the terms
+ *  of the GNU General Public License as published by the Free Software Found-
+ *  ation, either version 3 of the License, or (at your option) any later version.
+ *
+ *  RetroArch is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+ *  PURPOSE.  See the GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along with RetroArch.
+ *  If not, see <http://www.gnu.org/licenses/>.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include "../verbosity.h"
@@ -22,6 +53,10 @@ timing srtiming;
 char sys_timing[256];
 char gam_timing[256];
 FILE *pf;
+
+#define MAX_HEIGHT 300
+
+unsigned last_set_height = 0;
 
 void dynares_print_time(void)
 {
@@ -98,6 +133,30 @@ void adjust_interlaced_height(unsigned *height, timing *t)
       t->vvv = *height;
       t->v_total /= 2;
    }
+}
+
+void check_max_height(unsigned *height)
+{
+   if (*height > MAX_HEIGHT)
+   {
+      RARCH_LOG("[DynaRes]: Height exceeds max allowed height (%d). Halving height from %u", MAX_HEIGHT, *height);
+      *height /= 2;
+      RARCH_LOG(" to %u\n", *height);
+   }
+}
+
+void dynares_check_interlaced_and_adjust(unsigned *width, unsigned *height)
+{
+   settings_t *settings = config_get_ptr();
+   if (srtiming.interlaced)
+   {
+      RARCH_LOG("[DynaRes]: Adjusting interlaced resolution: %dx%d\n", *width, *height);
+      adjust_interlaced_height(height, &srtiming);
+      settings->uints.video_fullscreen_x = *width;
+      settings->uints.video_fullscreen_y = *height;
+      RARCH_LOG("[DynaRes]: Adjusted interlaced resolution: %dx%d\n", *width, *height);
+   }
+   check_max_height(height);
 }
 
 void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsigned base_height, double fps, int region, float *font_size)
@@ -387,6 +446,7 @@ void dynares_init(unsigned *width, unsigned *height, unsigned base_width, unsign
       }
    }
    /* Adjust viewport to match the new height */
+   dynares_check_interlaced_and_adjust(width, height);
    v_height = *height;
 
    /* Write timings to file */
@@ -519,17 +579,17 @@ void dynares_set_geometry(unsigned base_width, unsigned base_height, double fps)
          v_height = (settings->uints.video_fullscreen_y / base_height) * base_height - overscan_y;
       }
       /* Adjust viewport to match the new height */
-      if (srtiming.interlaced)
-      {
-         v_height /= 2;
-         overscan_y = 0; // Set overscan_y to 0 for interlaced games
-      }
+      dynares_check_interlaced_and_adjust(&v_width, &v_height);
 
-      settings->video_viewport_custom.width = v_width;
-      settings->video_viewport_custom.height = v_height;
-      settings->video_viewport_custom.x = (settings->uints.video_fullscreen_x - v_width) / 2;
-      settings->video_viewport_custom.y = 0; // Explicitly set to 0
-      RARCH_LOG("[DynaRes]: Geom: %s: Viewport resolution changed: %ux%u\n", dynares, v_width, v_height);
-      dynares_video_show_info(base_width, base_height, srtiming.interlaced, fps);
+      if (last_set_height != v_height)
+      {
+         settings->video_viewport_custom.width = v_width;
+         settings->video_viewport_custom.height = v_height;
+         settings->video_viewport_custom.x = (settings->uints.video_fullscreen_x - v_width) / 2;
+         settings->video_viewport_custom.y = 0; // Explicitly set to 0
+         last_set_height = v_height;
+         RARCH_LOG("[DynaRes]: Geom: %s: Viewport resolution changed: %ux%u\n", dynares, v_width, v_height);
+         dynares_video_show_info(base_width, base_height, srtiming.interlaced, fps);
+      }
    }
 }
