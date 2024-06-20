@@ -4165,13 +4165,6 @@ static void retroarch_print_help(const char *arg0)
          "  based on the skeleton config (" GLOBAL_CONFIG_DIR "/retroarch.cfg).\n"
          , sizeof(buf));
 #endif
-   strlcat(buf, "      --appendconfig=FILE        "
-         "Extra config files are loaded in, and take priority over\n"
-         "                                 "
-         "  config selected in -c (or default). Multiple configs are\n"
-         "                                 "
-         "  delimited by '|'.\n"
-         , sizeof(buf));
 #endif
 
    fputs(buf, stdout);
@@ -4670,9 +4663,6 @@ static bool retroarch_parse_input_and_config(
 #ifdef HAVE_CONFIGFILE
             case 'c':
                path_set(RARCH_PATH_CONFIG, optarg);
-               break;
-            case RA_OPT_APPENDCONFIG:
-               path_set(RARCH_PATH_CONFIG_APPEND, optarg);
                break;
 #endif
 
