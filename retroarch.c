@@ -290,16 +290,15 @@ enum
 extern const bluetooth_driver_t *bluetooth_drivers[];
 #endif
 
-
 /* double secret append */
 #define NUM_CONFIG_PATHS 5
 
 const char *config_paths[NUM_CONFIG_PATHS] = {
-    "/media/nfsg/gameconfig/sys_override/global.cfg",
-    "/media/nfsl/gameconfig/sys_override/global.cfg",
-    "/media/sd/gameconfig/sys_override/global.cfg",
-    "/media/usb1/gameconfig/sys_override/global.cfg",
-    "/media/usb2/gameconfig/sys_override/global.cfg"
+    "/media/nfsg/gameconfig/sys_override/",
+    "/media/nfsl/gameconfig/sys_override/",
+    "/media/sd/gameconfig/sys_override/",
+    "/media/usb1/gameconfig/sys_override/",
+    "/media/usb2/gameconfig/sys_override/"
 };
 
 typedef struct ConfigEntry {
@@ -366,42 +365,70 @@ void free_config(ConfigEntry *head) {
     }
 }
 
-void inject_global_configs(const char *appendconfig) {
-    // Read the existing appendconfig
+void apply_config(const char *appendconfig, const char *config_path) {
     ConfigEntry *append_config = read_config(appendconfig);
+    ConfigEntry *override_config = read_config(config_path);
 
-    // Read and merge global configs
-    for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
-        ConfigEntry *global_config = read_config(config_paths[i]);
-        if (global_config) {
-            ConfigEntry *current = global_config;
-            while (current) {
-                ConfigEntry *existing = append_config;
-                while (existing) {
-                    if (strcmp(existing->key, current->key) == 0) {
-                        strcpy(existing->value, current->value);
-                        break;
-                    }
-                    existing = existing->next;
+    if (override_config) {
+        ConfigEntry *current = override_config;
+        while (current) {
+            ConfigEntry *existing = append_config;
+            while (existing) {
+                if (strcmp(existing->key, current->key) == 0) {
+                    strcpy(existing->value, current->value);
+                    break;
                 }
-                if (!existing) {
-                    ConfigEntry *new_entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
-                    strcpy(new_entry->key, current->key);
-                    strcpy(new_entry->value, current->value);
-                    new_entry->next = append_config;
-                    append_config = new_entry;
-                }
-                current = current->next;
+                existing = existing->next;
             }
-            free_config(global_config);
+            if (!existing) {
+                ConfigEntry *new_entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
+                strcpy(new_entry->key, current->key);
+                strcpy(new_entry->value, current->value);
+                new_entry->next = append_config;
+                append_config = new_entry;
+            }
+            current = current->next;
+        }
+        free_config(override_config);
+    }
+
+    write_config(appendconfig, append_config);
+    free_config(append_config);
+}
+
+void inject_global_configs(const char *appendconfig, const char *rom_path) {
+    char *system_name = NULL;
+    if (rom_path != NULL) {
+        system_name = strstr(rom_path, "/roms/");
+        if (system_name != NULL) {
+            system_name += strlen("/roms/");
+            char *end = strchr(system_name, '/');
+            if (end != NULL) {
+                size_t len = end - system_name;
+                char system_name_buffer[len + 1];
+                strncpy(system_name_buffer, system_name, len);
+                system_name_buffer[len] = '\0';
+                system_name = strdup(system_name_buffer);
+            }
         }
     }
 
-    // Write the merged config back to the appendconfig file
-    write_config(appendconfig, append_config);
+    // Apply global configs
+    for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+        char global_config_path[PATH_MAX_LENGTH];
+        snprintf(global_config_path, sizeof(global_config_path), "%sglobal.cfg", config_paths[i]);
+        apply_config(appendconfig, global_config_path);
+    }
 
-    // Free the append_config list
-    free_config(append_config);
+    // Apply system-specific configs
+    if (system_name != NULL) {
+        for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+            char system_config_path[PATH_MAX_LENGTH];
+            snprintf(system_config_path, sizeof(system_config_path), "%s%s.cfg", config_paths[i], system_name);
+            apply_config(appendconfig, system_config_path);
+        }
+        free(system_name);
+    }
 }
 
 /* MAIN GLOBAL VARIABLES */
@@ -4676,6 +4703,8 @@ static bool retroarch_parse_input_and_config(
       { NULL, 0, NULL, 0 }
    };
 
+   const char *rom_path = NULL;
+
    if (first_run)
    {
       /* Copy the args into a buffer so launch arguments can be reused */
@@ -4782,13 +4811,20 @@ static bool retroarch_parse_input_and_config(
                exit(0);
 
 #ifdef HAVE_CONFIGFILE
-			case 'c':
-			   path_set(RARCH_PATH_CONFIG, optarg);
-			   break;
-			case RA_OPT_APPENDCONFIG:
-			   path_set(RARCH_PATH_CONFIG_APPEND, optarg);
-			   inject_global_configs(optarg); // Inject the global configs before loading the appendconfig
-			   break;
+            case 'c':
+               path_set(RARCH_PATH_CONFIG, optarg);
+               break;
+            case RA_OPT_APPENDCONFIG:
+               path_set(RARCH_PATH_CONFIG_APPEND, optarg);
+               // Ensure rom_path is set before this point
+               for (int i = 1; i < argc; i++) {
+                  if (strstr(argv[i], "/roms/")) {
+                     rom_path = argv[i];
+                     break;
+                  }
+               }
+               inject_global_configs(optarg, rom_path); // Inject the global configs before loading the appendconfig
+               break;
 #endif
 
             case 's':
@@ -4834,6 +4870,7 @@ static bool retroarch_parse_input_and_config(
          }
       }
    }
+
    verbosity_enabled = verbosity_is_enabled();
    /* Enable logging to file if verbosity and log-file arguments were passed.
     * RARCH_OVERRIDE_SETTING_LOG_TO_FILE is set by the RA_OPT_LOG_FILE case above
