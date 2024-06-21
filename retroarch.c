@@ -290,6 +290,120 @@ enum
 extern const bluetooth_driver_t *bluetooth_drivers[];
 #endif
 
+
+/* double secret append */
+#define NUM_CONFIG_PATHS 5
+
+const char *config_paths[NUM_CONFIG_PATHS] = {
+    "/media/nfsg/gameconfig/sys_override/global.cfg",
+    "/media/nfsl/gameconfig/sys_override/global.cfg",
+    "/media/sd/gameconfig/sys_override/global.cfg",
+    "/media/usb1/gameconfig/sys_override/global.cfg",
+    "/media/usb2/gameconfig/sys_override/global.cfg"
+};
+
+typedef struct ConfigEntry {
+    char key[256];
+    char value[256];
+    struct ConfigEntry *next;
+} ConfigEntry;
+
+ConfigEntry* read_config(const char *path) {
+    FILE *file = fopen(path, "r");
+    if (!file) return NULL;
+
+    ConfigEntry *head = NULL;
+    ConfigEntry *tail = NULL;
+
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
+        char *equals = strchr(line, '=');
+        if (equals) {
+            *equals = '\0';
+            char *key = line;
+            char *value = equals + 1;
+
+            // Remove trailing newline
+            value[strcspn(value, "\n")] = '\0';
+
+            ConfigEntry *entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
+            strcpy(entry->key, key);
+            strcpy(entry->value, value);
+            entry->next = NULL;
+
+            if (tail) {
+                tail->next = entry;
+            } else {
+                head = entry;
+            }
+            tail = entry;
+        }
+    }
+
+    fclose(file);
+    return head;
+}
+
+void write_config(const char *path, ConfigEntry *head) {
+    FILE *file = fopen(path, "w");
+    if (!file) return;
+
+    ConfigEntry *current = head;
+    while (current) {
+        fprintf(file, "%s=%s\n", current->key, current->value);
+        current = current->next;
+    }
+
+    fclose(file);
+}
+
+void free_config(ConfigEntry *head) {
+    ConfigEntry *current = head;
+    while (current) {
+        ConfigEntry *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+void inject_global_configs(const char *appendconfig) {
+    // Read the existing appendconfig
+    ConfigEntry *append_config = read_config(appendconfig);
+
+    // Read and merge global configs
+    for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+        ConfigEntry *global_config = read_config(config_paths[i]);
+        if (global_config) {
+            ConfigEntry *current = global_config;
+            while (current) {
+                ConfigEntry *existing = append_config;
+                while (existing) {
+                    if (strcmp(existing->key, current->key) == 0) {
+                        strcpy(existing->value, current->value);
+                        break;
+                    }
+                    existing = existing->next;
+                }
+                if (!existing) {
+                    ConfigEntry *new_entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
+                    strcpy(new_entry->key, current->key);
+                    strcpy(new_entry->value, current->value);
+                    new_entry->next = append_config;
+                    append_config = new_entry;
+                }
+                current = current->next;
+            }
+            free_config(global_config);
+        }
+    }
+
+    // Write the merged config back to the appendconfig file
+    write_config(appendconfig, append_config);
+
+    // Free the append_config list
+    free_config(append_config);
+}
+
 /* MAIN GLOBAL VARIABLES */
 
 struct rarch_state
@@ -4165,6 +4279,13 @@ static void retroarch_print_help(const char *arg0)
          "  based on the skeleton config (" GLOBAL_CONFIG_DIR "/retroarch.cfg).\n"
          , sizeof(buf));
 #endif
+   strlcat(buf, "      --appendconfig=FILE        "
+         "Extra config files are loaded in, and take priority over\n"
+         "                                 "
+         "  config selected in -c (or default). Multiple configs are\n"
+         "                                 "
+         "  delimited by '|'.\n"
+         , sizeof(buf));
 #endif
 
    fputs(buf, stdout);
@@ -4661,9 +4782,13 @@ static bool retroarch_parse_input_and_config(
                exit(0);
 
 #ifdef HAVE_CONFIGFILE
-            case 'c':
-               path_set(RARCH_PATH_CONFIG, optarg);
-               break;
+			case 'c':
+			   path_set(RARCH_PATH_CONFIG, optarg);
+			   break;
+			case RA_OPT_APPENDCONFIG:
+			   path_set(RARCH_PATH_CONFIG_APPEND, optarg);
+			   inject_global_configs(optarg); // Inject the global configs before loading the appendconfig
+			   break;
 #endif
 
             case 's':
