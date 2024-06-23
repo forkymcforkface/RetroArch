@@ -290,6 +290,174 @@ enum
 extern const bluetooth_driver_t *bluetooth_drivers[];
 #endif
 
+/* double secret append */
+#define NUM_CONFIG_PATHS 5
+
+const char *config_paths[NUM_CONFIG_PATHS] = {
+    "/media/nfsg/gameconfig/sys_override/",
+    "/media/nfsl/gameconfig/sys_override/",
+    "/media/sd/gameconfig/sys_override/",
+    "/media/usb1/gameconfig/sys_override/",
+    "/media/usb2/gameconfig/sys_override/"
+};
+
+typedef struct ConfigEntry {
+    char key[256];
+    char value[256];
+    struct ConfigEntry *next;
+} ConfigEntry;
+
+ConfigEntry* read_config(const char *path) {
+    FILE *file = fopen(path, "r");
+    if (!file) return NULL;
+
+    ConfigEntry *head = NULL;
+    ConfigEntry *tail = NULL;
+
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
+        char *equals = strchr(line, '=');
+        if (equals) {
+            *equals = '\0';
+            char *key = line;
+            char *value = equals + 1;
+
+            // Remove trailing newline
+            value[strcspn(value, "\n")] = '\0';
+
+            ConfigEntry *entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
+            strcpy(entry->key, key);
+            strcpy(entry->value, value);
+            entry->next = NULL;
+
+            if (tail) {
+                tail->next = entry;
+            } else {
+                head = entry;
+            }
+            tail = entry;
+        }
+    }
+
+    fclose(file);
+    return head;
+}
+
+void write_config(const char *path, ConfigEntry *head) {
+    FILE *file = fopen(path, "w");
+    if (!file) return;
+
+    ConfigEntry *current = head;
+    while (current) {
+        fprintf(file, "%s=%s\n", current->key, current->value);
+        current = current->next;
+    }
+
+    fclose(file);
+}
+
+void free_config(ConfigEntry *head) {
+    ConfigEntry *current = head;
+    while (current) {
+        ConfigEntry *next = current->next;
+        free(current);
+        current = next;
+    }
+}
+
+void apply_config(const char *appendconfig, const char *config_path) {
+    ConfigEntry *append_config = read_config(appendconfig);
+    ConfigEntry *override_config = read_config(config_path);
+
+    if (override_config) {
+        ConfigEntry *current = override_config;
+        while (current) {
+            ConfigEntry *existing = append_config;
+            while (existing) {
+                if (strcmp(existing->key, current->key) == 0) {
+                    strcpy(existing->value, current->value);
+                    break;
+                }
+                existing = existing->next;
+            }
+            if (!existing) {
+                ConfigEntry *new_entry = (ConfigEntry *)malloc(sizeof(ConfigEntry));
+                strcpy(new_entry->key, current->key);
+                strcpy(new_entry->value, current->value);
+                new_entry->next = append_config;
+                append_config = new_entry;
+            }
+            current = current->next;
+        }
+        free_config(override_config);
+    }
+
+    write_config(appendconfig, append_config);
+    free_config(append_config);
+}
+
+void inject_global_configs(const char *appendconfig, const char *rom_path) {
+    char *system_name = NULL;
+    char *arcade_system_name = NULL;
+
+    if (rom_path != NULL) {
+        // Extract system name
+        system_name = strstr(rom_path, "/roms/");
+        if (system_name != NULL) {
+            system_name += strlen("/roms/");
+            char *end = strchr(system_name, '/');
+            if (end != NULL) {
+                size_t len = end - system_name;
+                char system_name_buffer[len + 1];
+                strncpy(system_name_buffer, system_name, len);
+                system_name_buffer[len] = '\0';
+                system_name = strdup(system_name_buffer);
+            }
+        }
+
+        // Extract arcade system name
+        arcade_system_name = strstr(rom_path, "/roms/arcade/");
+        if (arcade_system_name != NULL) {
+            arcade_system_name += strlen("/roms/arcade/");
+            char *end = strchr(arcade_system_name, '/');
+            if (end != NULL) {
+                size_t len = end - arcade_system_name;
+                char arcade_system_name_buffer[len + 1];
+                strncpy(arcade_system_name_buffer, arcade_system_name, len);
+                arcade_system_name_buffer[len] = '\0';
+                arcade_system_name = strdup(arcade_system_name_buffer);
+            }
+        }
+    }
+
+    // Apply global configs
+    for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+        char global_config_path[PATH_MAX_LENGTH];
+        snprintf(global_config_path, sizeof(global_config_path), "%sglobal.cfg", config_paths[i]);
+        apply_config(appendconfig, global_config_path);
+    }
+
+    // Apply system-specific configs
+    if (system_name != NULL) {
+        for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+            char system_config_path[PATH_MAX_LENGTH];
+            snprintf(system_config_path, sizeof(system_config_path), "%s%s.cfg", config_paths[i], system_name);
+            apply_config(appendconfig, system_config_path);
+        }
+        free(system_name);
+    }
+
+    // Apply arcade system-specific configs
+    if (arcade_system_name != NULL) {
+        for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+            char arcade_system_config_path[PATH_MAX_LENGTH];
+            snprintf(arcade_system_config_path, sizeof(arcade_system_config_path), "%s%s.cfg", config_paths[i], arcade_system_name);
+            apply_config(appendconfig, arcade_system_config_path);
+        }
+        free(arcade_system_name);
+    }
+}
+
 /* MAIN GLOBAL VARIABLES */
 
 struct rarch_state
@@ -4562,6 +4730,8 @@ static bool retroarch_parse_input_and_config(
       { NULL, 0, NULL, 0 }
    };
 
+   const char *rom_path = NULL;
+
    if (first_run)
    {
       /* Copy the args into a buffer so launch arguments can be reused */
@@ -4673,6 +4843,14 @@ static bool retroarch_parse_input_and_config(
                break;
             case RA_OPT_APPENDCONFIG:
                path_set(RARCH_PATH_CONFIG_APPEND, optarg);
+               // Ensure rom_path is set before this point
+               for (int i = 1; i < argc; i++) {
+                  if (strstr(argv[i], "/roms/")) {
+                     rom_path = argv[i];
+                     break;
+                  }
+               }
+               inject_global_configs(optarg, rom_path); // Inject the global configs before loading the appendconfig
                break;
 #endif
 
@@ -4719,6 +4897,7 @@ static bool retroarch_parse_input_and_config(
          }
       }
    }
+
    verbosity_enabled = verbosity_is_enabled();
    /* Enable logging to file if verbosity and log-file arguments were passed.
     * RARCH_OVERRIDE_SETTING_LOG_TO_FILE is set by the RA_OPT_LOG_FILE case above
