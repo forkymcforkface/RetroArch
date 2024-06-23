@@ -398,7 +398,10 @@ void apply_config(const char *appendconfig, const char *config_path) {
 
 void inject_global_configs(const char *appendconfig, const char *rom_path) {
     char *system_name = NULL;
+    char *arcade_system_name = NULL;
+
     if (rom_path != NULL) {
+        // Extract system name
         system_name = strstr(rom_path, "/roms/");
         if (system_name != NULL) {
             system_name += strlen("/roms/");
@@ -409,6 +412,20 @@ void inject_global_configs(const char *appendconfig, const char *rom_path) {
                 strncpy(system_name_buffer, system_name, len);
                 system_name_buffer[len] = '\0';
                 system_name = strdup(system_name_buffer);
+            }
+        }
+
+        // Extract arcade system name
+        arcade_system_name = strstr(rom_path, "/roms/arcade/");
+        if (arcade_system_name != NULL) {
+            arcade_system_name += strlen("/roms/arcade/");
+            char *end = strchr(arcade_system_name, '/');
+            if (end != NULL) {
+                size_t len = end - arcade_system_name;
+                char arcade_system_name_buffer[len + 1];
+                strncpy(arcade_system_name_buffer, arcade_system_name, len);
+                arcade_system_name_buffer[len] = '\0';
+                arcade_system_name = strdup(arcade_system_name_buffer);
             }
         }
     }
@@ -428,6 +445,16 @@ void inject_global_configs(const char *appendconfig, const char *rom_path) {
             apply_config(appendconfig, system_config_path);
         }
         free(system_name);
+    }
+
+    // Apply arcade system-specific configs
+    if (arcade_system_name != NULL) {
+        for (int i = 0; i < NUM_CONFIG_PATHS; ++i) {
+            char arcade_system_config_path[PATH_MAX_LENGTH];
+            snprintf(arcade_system_config_path, sizeof(arcade_system_config_path), "%s%s.cfg", config_paths[i], arcade_system_name);
+            apply_config(appendconfig, arcade_system_config_path);
+        }
+        free(arcade_system_name);
     }
 }
 
