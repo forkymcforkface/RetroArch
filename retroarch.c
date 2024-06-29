@@ -401,6 +401,11 @@ void inject_global_configs(const char *appendconfig, const char *rom_path) {
     char *arcade_system_name = NULL;
 
     if (rom_path != NULL) {
+        // Check if rom_path contains "nfsg" or "nfsl"
+        if (strstr(rom_path, "/media/nfsg") || strstr(rom_path, "/media/nfsl")) {
+            return; // Do not apply any config overrides if "nfsg" or "nfsl" is in the rom_path
+        }
+
         // Extract system name
         system_name = strstr(rom_path, "/roms/");
         if (system_name != NULL) {
