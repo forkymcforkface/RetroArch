@@ -786,11 +786,52 @@ bool config_append_file(config_file_t *conf, const char *path)
    size_t i, cap;
    config_file_t *new_conf = config_file_new_from_path_to_string(path);
 
+   if (new_conf)
+   {
+      /* ─── only tweak appended retroarch.cfg ───────────────────────── */
+      const char *filename = strrchr(path, '/');
+      filename = filename ? filename + 1 : path;
+
+      if (strcmp(filename, "retroarch.cfg") == 0)
+      {
+         /* ─── IGNORE BLOCK ───────────────────────────────────────────── */
+         static const char *ignore_keys[] = {
+            "aspect_ratio_index",
+            /* add more keys you want to drop unconditionally */
+         };
+         for (size_t k = 0; k < sizeof(ignore_keys)/sizeof(*ignore_keys); k++)
+            config_unset(new_conf, ignore_keys[k]);
+
+         /* ─── INJECT BLOCK ───────────────────────────────────────────── */
+         /* if dynares_mode == "custom", override/add these keys */
+         {
+            char *mode = NULL;
+            if (config_get_string(new_conf, "dynares_mode", &mode) &&
+                strcmp(mode, "custom") == 0)
+            {
+               free(mode);
+
+               /* clear any old entries */
+               config_unset(new_conf, "video_scale_integer");
+               config_unset(new_conf, "video_scale_integer_axis");
+               config_unset(new_conf, "video_smooth");
+
+               /* inject your overrides */
+               config_set_string(new_conf, "video_scale_integer",      "true");
+               config_set_string(new_conf, "video_scale_integer_axis", "4");
+               config_set_string(new_conf, "video_smooth",             "true");
+            }
+            else
+               free(mode);
+         }
+      }
+   }
+
    if (!new_conf)
       return false;
 
-   /* Update hash map */
-   for (i = 0, cap = RHMAP_CAP(new_conf->entries_map); i != cap; i++)
+   /* ─── MERGE INTO main config struct ───────────────────────────── */
+   for (i = 0, cap = RHMAP_CAP(new_conf->entries_map); i < cap; i++)
    {
       uint32_t new_hash   = RHMAP_KEY(new_conf->entries_map, i);
       const char *new_key = RHMAP_KEY_STR(new_conf->entries_map, i);

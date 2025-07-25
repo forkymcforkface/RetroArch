@@ -289,6 +289,8 @@ static void get_modeline_for_kms(videocrt_switch_t *p_switch, sr_mode* srm)
    p_switch->doublescan  = srm->doublescan;
    p_switch->hsync       = srm->hsync;
    p_switch->vsync       = srm->vsync;
+   extern bool video_monitor_interlaced;
+   video_monitor_interlaced = srm->interlace;
 }
 
 static void switch_res_crt(
@@ -297,8 +299,61 @@ static void switch_res_crt(
       unsigned crt_mode, unsigned native_width,
       int monitor_index, int super_width)
 {
-   int w                   = native_width;
-   int h                   = height;
+   extern unsigned video_monitor_native_w;
+   extern unsigned video_monitor_native_h;
+   video_monitor_native_w = native_width;
+   video_monitor_native_h = height;
+
+   if (super_width == 1)
+   {
+      unsigned base_w = native_width;
+      unsigned dyn_w;
+
+      if (base_w == 384 || base_w == 448)
+         dyn_w = 2744;
+      else if (base_w == 292)
+         dyn_w = 2400;
+      else if (base_w == 160 || base_w == 240 ||
+               base_w == 304 || base_w == 400 ||
+               base_w == 800)
+         dyn_w = 2464;
+      else if (base_w == 720)
+         dyn_w = 2880;
+      else if (base_w == 256 || base_w == 320 ||
+               base_w == 368 || base_w == 512 ||
+               base_w == 640)
+         dyn_w = 2624;
+      else
+      {
+         unsigned candidates[] = {2400, 2464, 2624, 2744, 2880};
+         int cnt = sizeof(candidates) / sizeof(candidates[0]);
+         bool picked = false;
+
+         for (int i = 0; i < cnt; i++)
+         {
+            if (candidates[i] % base_w == 0)
+            {
+               dyn_w = candidates[i];
+               picked = true;
+               break;
+            }
+         }
+
+         if (!picked)
+         {
+            const unsigned MAX_SUPER = 3840;
+            unsigned mul = MAX_SUPER / base_w;
+            if (mul < 1)
+               mul = 1;
+            dyn_w = base_w * mul;
+         }
+      }
+
+      super_width = (int)dyn_w;
+   }
+
+   int w = native_width;
+   int h = height;
 
    /* Check if SR2 is loaded, if not, load it */
    if (crt_sr2_init(p_switch, monitor_index, crt_mode, super_width))
@@ -340,7 +395,7 @@ static void switch_res_crt(
             we update the current values and make adjustments */
          strlcpy(core_name,   current_core_name,   sizeof(core_name));
          strlcpy(content_dir, current_content_dir, sizeof(content_dir));
-         strlcpy(content_name, current_content_name, sizeof(current_content_name));
+         strlcpy(content_name, current_content_name, sizeof(content_name));
          RARCH_LOG("[CRT] Current running core: %s.\n", core_name);
          crt_adjust_sr_ini(p_switch);
          p_switch->hh_core = false;
@@ -385,14 +440,21 @@ static void switch_res_crt(
       if (p_switch->kms_ctx)
       {
          get_modeline_for_kms(p_switch, &srm);
+         extern bool video_monitor_interlaced;
+         video_monitor_interlaced = srm.interlace;
          video_driver_set_video_mode(srm.width, srm.height, true);
       }
       else if (p_switch->khr_ctx)
+      {
          RARCH_WARN("[CRT] Vulkan -> Can't modeswitch for now.\n");
+      }
       else
+      {
          ret = sr_set_mode(srm.id);
-      if (!p_switch->kms_ctx && !ret)
-         RARCH_ERR("[CRT] SR failed to switch mode.\n");
+         if (!p_switch->kms_ctx && !ret)
+            RARCH_ERR("[CRT] SR failed to switch mode.\n");
+      }
+
       p_switch->sr_core_hz = (float)srm.vfreq;
 
       crt_switch_set_aspect(p_switch,

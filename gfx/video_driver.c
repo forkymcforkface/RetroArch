@@ -69,6 +69,14 @@
 
 #define FRAME_DELAY_AUTO_DEBUG 0
 
+/* Remember the last native core width/height so our OSD can use them */
+unsigned video_monitor_native_w = 0;
+unsigned video_monitor_native_h = 0;
+
+/* Remember interlace or progressive */
+#include <stdbool.h>
+bool video_monitor_interlaced = false;
+
 typedef struct
 {
    struct string_list *list;
@@ -805,13 +813,17 @@ void video_monitor_set_refresh_rate(float hz)
       return;
 
    snprintf(rate, sizeof(rate), "%.3f", hz);
-   _len = snprintf(msg, sizeof(msg),
-      msg_hash_to_str(MSG_VIDEO_REFRESH_RATE_CHANGED), rate);
+   /* use stored native dimensions, not the super-res FB */
+   unsigned fw = video_monitor_native_w;
+   unsigned fh = video_monitor_native_h;
+   /* choose ‘i’ or ‘p’ based on interlace flag */
+   char pi = video_monitor_interlaced ? 'i' : 'p';
+   _len = snprintf(msg, sizeof(msg), "%ux%u%c %sHz.", fw, fh, pi, rate);
 
    /* Message is visible for twice the usual duration */
    /* as modeswitch will cause monitors to go blank for a while */
    if (settings->bools.notification_show_refresh_rate)
-      runloop_msg_queue_push(msg, _len, 1, 360, false, NULL,
+      runloop_msg_queue_push(msg, _len, 1, 360, true, NULL,
             MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
    RARCH_LOG("[Video] %s\n", msg);
 
